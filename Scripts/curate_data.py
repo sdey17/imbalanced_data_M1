@@ -30,8 +30,10 @@ def main():
     activity = new_client.activity
     ch_data = pd.DataFrame(activity.filter(target_chembl_id__in=['CHEMBL216']))
     ch_data_filt = ch_data[ch_data['standard_type'].isin(['EC50', 'IC50', 'Ki'])][['canonical_smiles', 'standard_relation', 'standard_units', 'standard_value']]
-    chm_absolute = ch_data_filt[ch_data_filt['standard_relation'].str.contains('>|<')==False][['canonical_smiles','standard_value']]
-    chm_greater = ch_data_filt[ch_data_filt['standard_relation'].str.contains('>')==True][['canonical_smiles','standard_value']]
+    # Optimized: single-pass filtering with cached str.contains results
+    contains_gt_or_lt = ch_data_filt['standard_relation'].str.contains('>|<')
+    chm_absolute = ch_data_filt[~contains_gt_or_lt][['canonical_smiles','standard_value']]
+    chm_greater = ch_data_filt[ch_data_filt['standard_relation'].str.contains('>')][['canonical_smiles','standard_value']]
     chm_greater_inactives = chm_greater[chm_greater['standard_value'].astype(float) > (inactive_range*1000)]
     m1_chm = pd.concat([chm_absolute, chm_greater_inactives])
     m1_chm.columns = ['SMILES', 'Value']
@@ -45,17 +47,21 @@ def main():
         print(f"Error: {response.status_code}")
     bdb_activity = pd.DataFrame.from_dict(data.get('getLindsByUniprotResponse').get('bdb.affinities'))
     bdb_activity_filt = bdb_activity[bdb_activity['bdb.affinity_type'].isin(['EC50', 'IC50', 'Ki'])][['bdb.smile', 'bdb.affinity']]
-    bdb_absolute = bdb_activity_filt[bdb_activity_filt['bdb.affinity'].str.contains('>|<')==False][['bdb.smile','bdb.affinity']]
-    bdb_greater = bdb_activity_filt[bdb_activity_filt['bdb.affinity'].str.contains('>')==True][['bdb.smile','bdb.affinity']]
+    # Optimized: single-pass filtering with cached str.contains results
+    bdb_contains_gt_or_lt = bdb_activity_filt['bdb.affinity'].str.contains('>|<')
+    bdb_absolute = bdb_activity_filt[~bdb_contains_gt_or_lt][['bdb.smile','bdb.affinity']]
+    bdb_greater = bdb_activity_filt[bdb_activity_filt['bdb.affinity'].str.contains('>')][['bdb.smile','bdb.affinity']]
     bdb_greater['bdb.affinity'] = bdb_greater['bdb.affinity'].str.split('>').str[1]
     bdb_greater_inactives = bdb_greater[bdb_greater['bdb.affinity'].astype(float) > (inactive_range*1000)]
     m1_bdb = pd.concat([bdb_absolute, bdb_greater_inactives])
     m1_bdb.columns = ['SMILES', 'Value']
 
-    comb_all = pd.concat([m1_chm, m1_bdb])
-    comb_all['SMILES'] = comb_all['SMILES'].str.split('|').str[0]
-    comb_all['Value'] = (comb_all['Value'].astype(float))/1000
-    comb_all = comb_all.sort_values(by=['Value']).reset_index(drop=True)
+    # Optimized: use assign() chaining to reduce DataFrame copies
+    comb_all = (pd.concat([m1_chm, m1_bdb])
+                .assign(SMILES=lambda df: df['SMILES'].str.split('|').str[0])
+                .assign(Value=lambda df: df['Value'].astype(float) / 1000)
+                .sort_values(by='Value')
+                .reset_index(drop=True))
     print('Original combined data', comb_all.shape[0])
 
     '''
@@ -118,26 +124,32 @@ def main():
     7. Check for common fingerprints between the active and inactive datasets and remove such entries
     '''
 
-    ind_ac_tr=[]
-    ind_in_tr=[]
-    for i in range(train_dataset_in_df.shape[0]):
-        for j in range(train_dataset_ac_df.shape[0]):
-            if np.array_equal(train_dataset_in_df.Morgan2FP[i],train_dataset_ac_df.Morgan2FP[j]):
-                print('Train overlap',i,j)
-                ind_ac_tr.append(j)
-                ind_in_tr.append(i)
+    # Optimized O(n) set-based overlap detection instead of O(n²) nested loops
+    inactive_fps = {tuple(fp): i for i, fp in enumerate(train_dataset_in_df['Morgan2FP'])}
+    active_fps = {tuple(fp): j for j, fp in enumerate(train_dataset_ac_df['Morgan2FP'])}
+
+    overlapping_fps = set(inactive_fps.keys()) & set(active_fps.keys())
+    ind_ac_tr = [active_fps[fp] for fp in overlapping_fps]
+    ind_in_tr = [inactive_fps[fp] for fp in overlapping_fps]
+
+    if overlapping_fps:
+        for i, j in zip(ind_in_tr, ind_ac_tr):
+            print('Train overlap', i, j)
 
     train_dataset_ac_df = train_dataset_ac_df.drop(ind_ac_tr).reset_index(drop=True)
     train_dataset_in_df = train_dataset_in_df.drop(ind_in_tr).reset_index(drop=True)
 
-    ind_ac_te=[]
-    ind_in_te=[]
-    for i in range(test_dataset_in_df.shape[0]):
-        for j in range(test_dataset_ac_df.shape[0]):
-            if np.array_equal(test_dataset_in_df.Morgan2FP[i],test_dataset_ac_df.Morgan2FP[j]):
-                print('Test overlap',i,j)
-                ind_ac_te.append(j)
-                ind_in_te.append(i)
+    # Optimized O(n) set-based overlap detection for test set
+    test_inactive_fps = {tuple(fp): i for i, fp in enumerate(test_dataset_in_df['Morgan2FP'])}
+    test_active_fps = {tuple(fp): j for j, fp in enumerate(test_dataset_ac_df['Morgan2FP'])}
+
+    overlapping_test_fps = set(test_inactive_fps.keys()) & set(test_active_fps.keys())
+    ind_ac_te = [test_active_fps[fp] for fp in overlapping_test_fps]
+    ind_in_te = [test_inactive_fps[fp] for fp in overlapping_test_fps]
+
+    if overlapping_test_fps:
+        for i, j in zip(ind_in_te, ind_ac_te):
+            print('Test overlap', i, j)
 
     test_dataset_ac_df = test_dataset_ac_df.drop(ind_ac_te).reset_index(drop=True)
     test_dataset_in_df = test_dataset_in_df.drop(ind_in_te).reset_index(drop=True)
@@ -152,12 +164,16 @@ def main():
 
     print('Initial Training set',training_set['Activity'].value_counts())
 
-    source=[]
-    for i in range(training_set.shape[0]):
-        for j in range(ext_test_set.shape[0]):
-            if np.array_equal(training_set.Morgan2FP[i],ext_test_set.Morgan2FP[j]):
-                print('Public overlap',i,j)
-                source.append(i)
+    # Optimized O(n) set-based overlap detection between training and test
+    training_fps = {tuple(fp): i for i, fp in enumerate(training_set['Morgan2FP'])}
+    test_fps_set = {tuple(fp) for fp in ext_test_set['Morgan2FP']}
+
+    overlapping_train_test = training_fps.keys() & test_fps_set
+    source = [training_fps[fp] for fp in overlapping_train_test]
+
+    if overlapping_train_test:
+        for fp in overlapping_train_test:
+            print('Public overlap', training_fps[fp], 'found in test set')
 
     training_set = training_set.drop(source).reset_index(drop=True)
     print('Final training set',training_set['Activity'].value_counts())

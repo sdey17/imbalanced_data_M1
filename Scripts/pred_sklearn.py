@@ -1,4 +1,5 @@
 import pickle
+import numpy as np
 import pandas as pd
 from rdkit.Chem import PandasTools
 from sklearn.model_selection import StratifiedKFold
@@ -27,7 +28,7 @@ def get_classifier(model_name: str):
     
 def evaluate_model(model, X_test: np.ndarray, y_test: np.ndarray) -> Tuple[float, float, float, float, float, float]:
     """Evaluate a classification model and return accuracy and ROC AUC."""
-    y_pred = model.predict(list(X_test))
+    y_pred = model.predict(X_test)
     acc = accuracy_score(y_test, y_pred)
 
     tn, fp, fn, tp = confusion_matrix(y_test, y_pred, labels=[0,1]).ravel()
@@ -48,15 +49,15 @@ def main(model: str):
     PandasTools.AddMoleculeColumnToFrame(frame=training_set, smilesCol='SMILES', molCol='Molecule')
     training_set['Morgan2FP'] = training_set['Molecule'].map(computeMorganFP)
 
-    X = training_set['Morgan2FP'].to_list()
+    X = np.vstack(training_set['Morgan2FP'].values)
     y = training_set['Activity'].to_numpy()
 
     skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=125)
     validation = pd.DataFrame(columns=['Accuracy', 'Sensitivity', 'Specificity', 'MCC', 'ROC-AUC', 'G-Mean'])
 
     for i, (train_index, test_index) in enumerate(skf.split(X, y)):
-        X_train = [X[i] for i in train_index]
-        X_test = [X[i] for i in test_index]
+        X_train = X[train_index]
+        X_test = X[test_index]
         y_train = y[train_index]
         y_test = y[test_index]
 

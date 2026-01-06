@@ -30,14 +30,14 @@ def main():
     4. Remove all RNN/DEG generated SMILES that are shorter than the smallest original SMILES and remove duplicates
     '''
 
+    # Optimized: vectorized min_index search and single duplicate removal
     dfx = df_valid
-    all_rdkit_noduplicates = dfx.drop_duplicates(subset=['SMILES','Activity']).dropna().sort_values(by="SMILES", key=lambda x: x.str.len()).reset_index(drop=True)
+    min_index = (dfx['Activity'] == 0).idxmax()  # Vectorized search instead of Python loop
+    all_rdkit_noduplicates = (dfx.iloc[min_index:]
+                              .sort_values(by='Activity')
+                              .drop_duplicates(subset=['SMILES'])  # Only one duplicate removal needed
+                              .reset_index(drop=True))
 
-    min_index = next(i for i, val in enumerate(dfx['Activity']) if val == 0)
-    all_rdkit_noduplicates = dfx.iloc[min_index:].sort_values(by="Activity").drop_duplicates(subset=['SMILES']).reset_index(drop=True)
-
-    print('Gen Combined', all_rdkit_noduplicates['Activity'].value_counts())
-    all_rdkit_noduplicates = all_rdkit_noduplicates.drop_duplicates(subset=['SMILES'])
     print('Gen Combined w/o duplicates', all_rdkit_noduplicates['Activity'].value_counts())
 
     '''
@@ -51,20 +51,25 @@ def main():
     actives = all_rdkit_noduplicates[all_rdkit_noduplicates['Activity']==1].reset_index(drop=True)
     inactives = all_rdkit_noduplicates[all_rdkit_noduplicates['Activity']==0].reset_index(drop=True)
 
-    source_ac = []
-    source_in = []
+    # Optimized O(n) set-based overlap detection instead of O(n²) nested loops
+    gen_fps = {tuple(fp): j for j, fp in enumerate(gen_training['Morgan2FP'])}
+    inactive_fps_set = {tuple(fp) for fp in inactives['Morgan2FP']}
+    active_fps_set = {tuple(fp) for fp in actives['Morgan2FP']}
 
-    for i in range(inactives.shape[0]):
-        for j in range(gen_training.shape[0]):
-            if np.array_equal(inactives.Morgan2FP[i],gen_training.Morgan2FP[j]):
-                print('Inactives overlap',i,j)
-                source_in.append(j)
+    # Find overlaps
+    overlapping_with_inactives = gen_fps.keys() & inactive_fps_set
+    overlapping_with_actives = gen_fps.keys() & active_fps_set
 
-    for i in range(actives.shape[0]):
-        for j in range(gen_training.shape[0]):
-            if np.array_equal(actives.Morgan2FP[i],gen_training.Morgan2FP[j]):
-                print('Actives overlap',i,j)
-                source_ac.append(j)
+    source_in = [gen_fps[fp] for fp in overlapping_with_inactives]
+    source_ac = [gen_fps[fp] for fp in overlapping_with_actives]
+
+    if overlapping_with_inactives:
+        for fp in overlapping_with_inactives:
+            print('Inactives overlap', gen_fps[fp])
+
+    if overlapping_with_actives:
+        for fp in overlapping_with_actives:
+            print('Actives overlap', gen_fps[fp])
 
     gen_training = gen_training.drop(source_in + source_ac).reset_index(drop=True)
 
@@ -79,12 +84,16 @@ def main():
     PandasTools.AddMoleculeColumnToFrame(frame=ext_test_set, smilesCol='SMILES', molCol='Molecule')
     ext_test_set['Morgan2FP'] = ext_test_set['Molecule'].map(computeMorganFP)
 
-    source=[]
-    for i in range(final_training_set.shape[0]):
-        for j in range(ext_test_set.shape[0]):
-            if np.array_equal(final_training_set.Morgan2FP[i],ext_test_set.Morgan2FP[j]):
-                print('Public overlap',i,j)
-                source.append(i)
+    # Optimized O(n) set-based overlap detection between training and test
+    final_training_fps = {tuple(fp): i for i, fp in enumerate(final_training_set['Morgan2FP'])}
+    test_fps_set = {tuple(fp) for fp in ext_test_set['Morgan2FP']}
+
+    overlapping_final = final_training_fps.keys() & test_fps_set
+    source = [final_training_fps[fp] for fp in overlapping_final]
+
+    if overlapping_final:
+        for fp in overlapping_final:
+            print('Public overlap', final_training_fps[fp], 'found in test set')
 
     final_training_set = final_training_set.drop(source).reset_index(drop=True)
     print('Final training set',final_training_set['Activity'].value_counts())
