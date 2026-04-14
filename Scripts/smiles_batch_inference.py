@@ -69,18 +69,14 @@ def _compute_fp(smiles: str):
     """
     try:
         from rdkit import Chem
-        from rdkit.Chem import AllChem
-        from rdkit import DataStructs
+        from rdkit.Chem import rdFingerprintGenerator
 
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
             return smiles, None
         canonical = Chem.MolToSmiles(mol)
-        a = np.zeros(_NBITS, dtype=np.float32)
-        DataStructs.ConvertToNumpyArray(
-            AllChem.GetMorganFingerprintAsBitVect(mol, _DEPTH, _NBITS), a
-        )
-        return canonical, a
+        gen = rdFingerprintGenerator.GetMorganGenerator(radius=_DEPTH, fpSize=_NBITS)
+        return canonical, gen.GetFingerprintAsNumPy(mol).astype(np.float32)
     except Exception:
         return smiles, None
 
@@ -100,8 +96,7 @@ def _standardize_and_compute_fp(smiles: str):
     """
     try:
         from rdkit import Chem
-        from rdkit.Chem import AllChem
-        from rdkit import DataStructs
+        from rdkit.Chem import rdFingerprintGenerator
         from chembl_structure_pipeline import standardizer, exclude_flag
 
         mol = Chem.MolFromSmiles(smiles)
@@ -118,11 +113,8 @@ def _standardize_and_compute_fp(smiles: str):
         if mol2 is None:
             return smiles, None
 
-        a = np.zeros(_NBITS, dtype=np.float32)
-        DataStructs.ConvertToNumpyArray(
-            AllChem.GetMorganFingerprintAsBitVect(mol2, _DEPTH, _NBITS), a
-        )
-        return canonical, a
+        gen = rdFingerprintGenerator.GetMorganGenerator(radius=_DEPTH, fpSize=_NBITS)
+        return canonical, gen.GetFingerprintAsNumPy(mol2).astype(np.float32)
     except Exception:
         return smiles, None
 

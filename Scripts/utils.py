@@ -2,10 +2,11 @@ import logging
 
 import numpy as np
 from rdkit import Chem
-from rdkit.Chem import AllChem
-from rdkit import DataStructs
+from rdkit.Chem import rdFingerprintGenerator
 from chembl_structure_pipeline import standardizer
 from chembl_structure_pipeline import exclude_flag
+
+_morgan_gen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=1024)
 
 def is_valid_structure(smiles: str) -> bool:
     """Check if a SMILES string represents a valid, non-excluded chemical structure."""
@@ -32,9 +33,9 @@ def standardize_and_canonicalize(smiles: str) -> str:
 
 def computeMorganFP(mol, depth: int = 2, nBits: int = 1024):
     """Compute Morgan fingerprint for a molecule as a NumPy array."""
-    a = np.zeros(nBits)
     try:
-        DataStructs.ConvertToNumpyArray(AllChem.GetMorganFingerprintAsBitVect(mol, depth, nBits), a)
+        gen = _morgan_gen if (depth == 2 and nBits == 1024) else \
+              rdFingerprintGenerator.GetMorganGenerator(radius=depth, fpSize=nBits)
+        return gen.GetFingerprintAsNumPy(mol).astype(np.float32)
     except:
         return None
-    return a
