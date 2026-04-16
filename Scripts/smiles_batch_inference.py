@@ -247,6 +247,66 @@ def run_inference_chunk(model, smiles_list, feat_results, threshold: float, batc
 
 
 # ---------------------------------------------------------------------------
+# Model loading
+# ---------------------------------------------------------------------------
+
+def _load_model(model_path: str):
+    """Load a DNN .keras model, working around tf.keras vs standalone keras
+    weight-path incompatibilities.
+
+    The .keras format is a ZIP archive containing config.json and
+    model.weights.h5.  When the model was saved with tensorflow.keras but is
+    being loaded with the standalone keras package (or vice versa), the
+    weight-path lookup inside the archive fails even at the same version.
+
+    Strategy:
+      1. Try tf.keras.models.load_model(compile=False) — works when save/load
+         environments match.
+      2. On failure, rebuild the architecture from code (matching
+         pred_dnn_w_transfer_learning.py:build_dnn) and extract weights
+         directly from the ZIP, bypassing the broken path-resolution logic.
+    """
+    import zipfile
+    import tempfile
+    import tensorflow as tf
+    from tensorflow.keras import Sequential
+    from tensorflow.keras.layers import Dense, Dropout
+
+    try:
+        model = tf.keras.models.load_model(model_path, compile=False)
+        logger.info("Model loaded via tf.keras.")
+        return model
+    except (ValueError, Exception) as e:
+        logger.warning("Standard load failed (%s). Rebuilding and loading weights directly.", e)
+
+    # Rebuild architecture — must match build_dnn() in pred_dnn_w_transfer_learning.py
+    model = Sequential([
+        Dense(1000, activation="relu", input_shape=(1024,)),
+        Dropout(0.25),
+        Dense(500, activation="relu"),
+        Dropout(0.25),
+        Dense(1, activation="sigmoid"),
+    ])
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with zipfile.ZipFile(model_path, "r") as zf:
+            names = zf.namelist()
+            weights_file = next(
+                (n for n in names if n.endswith(".weights.h5") or n == "model.weights.h5"),
+                None,
+            )
+            if weights_file is None:
+                raise RuntimeError(
+                    f"No weights file found inside {model_path}. Contents: {names}"
+                )
+            zf.extract(weights_file, tmpdir)
+        model.load_weights(os.path.join(tmpdir, weights_file))
+
+    logger.info("Model loaded via direct weight extraction.")
+    return model
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -308,7 +368,7 @@ def main():
         sys.exit(1)
 
     logger.info("Loading model: %s", model_path)
-    model = tf.keras.models.load_model(model_path, compile=False)
+    model = _load_model(model_path)
     logger.info("Model input shape: %s", model.input_shape)
 
     # ------------------------------------------------------------------
