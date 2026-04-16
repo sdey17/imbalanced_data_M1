@@ -308,7 +308,7 @@ def main():
         sys.exit(1)
 
     logger.info("Loading model: %s", model_path)
-    model = tf.keras.models.load_model(model_path)
+    model = tf.keras.models.load_model(model_path, compile=False)
     logger.info("Model input shape: %s", model.input_shape)
 
     # ------------------------------------------------------------------
