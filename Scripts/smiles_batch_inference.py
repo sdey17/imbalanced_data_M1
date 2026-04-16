@@ -254,20 +254,21 @@ def _load_model(model_path: str):
     """Load a DNN .keras model, working around tf.keras vs standalone keras
     weight-path incompatibilities.
 
-    The .keras format is a ZIP archive containing config.json and
-    model.weights.h5.  When the model was saved with tensorflow.keras but is
-    being loaded with the standalone keras package (or vice versa), the
-    weight-path lookup inside the archive fails even at the same version.
+    Both tf.keras.models.load_model and model.load_weights route through
+    keras/src/engine/base_layer.py:load_own_variables, which fails when the
+    weight paths inside the .keras ZIP were written by tensorflow.keras but
+    are being read by the standalone keras package (or vice versa).
 
     Strategy:
-      1. Try tf.keras.models.load_model(compile=False) — works when save/load
-         environments match.
-      2. On failure, rebuild the architecture from code (matching
-         pred_dnn_w_transfer_learning.py:build_dnn) and extract weights
-         directly from the ZIP, bypassing the broken path-resolution logic.
+      1. Try tf.keras.models.load_model(compile=False).
+      2. On failure, bypass keras weight loading entirely: rebuild the
+         architecture, unzip the .keras file, open model.weights.h5 with
+         h5py, collect all weight arrays, and assign them via
+         model.set_weights() — no keras path-resolution involved.
     """
     import zipfile
     import tempfile
+    import h5py
     import tensorflow as tf
     from tensorflow.keras import Sequential
     from tensorflow.keras.layers import Dense, Dropout
@@ -277,7 +278,7 @@ def _load_model(model_path: str):
         logger.info("Model loaded via tf.keras.")
         return model
     except (ValueError, Exception) as e:
-        logger.warning("Standard load failed (%s). Rebuilding and loading weights directly.", e)
+        logger.warning("Standard load failed (%s). Falling back to h5py loader.", e)
 
     # Rebuild architecture — must match build_dnn() in pred_dnn_w_transfer_learning.py
     model = Sequential([
@@ -287,22 +288,52 @@ def _load_model(model_path: str):
         Dropout(0.25),
         Dense(1, activation="sigmoid"),
     ])
+    # Forward pass so all weight tensors are allocated before set_weights()
+    model(tf.zeros((1, 1024)))
 
     with tempfile.TemporaryDirectory() as tmpdir:
         with zipfile.ZipFile(model_path, "r") as zf:
             names = zf.namelist()
-            weights_file = next(
+            weights_entry = next(
                 (n for n in names if n.endswith(".weights.h5") or n == "model.weights.h5"),
                 None,
             )
-            if weights_file is None:
+            if weights_entry is None:
                 raise RuntimeError(
                     f"No weights file found inside {model_path}. Contents: {names}"
                 )
-            zf.extract(weights_file, tmpdir)
-        model.load_weights(os.path.join(tmpdir, weights_file))
+            zf.extract(weights_entry, tmpdir)
 
-    logger.info("Model loaded via direct weight extraction.")
+        h5_path = os.path.join(tmpdir, weights_entry)
+
+        # Collect every leaf dataset from the HDF5 file
+        leaf_arrays = {}
+        def _collect(path, obj):
+            if isinstance(obj, h5py.Dataset) and len(obj.shape) > 0:
+                leaf_arrays[path] = np.array(obj)
+
+        with h5py.File(h5_path, "r") as f:
+            f.visititems(_collect)
+
+        logger.info("h5py found %d weight arrays in %s.", len(leaf_arrays), weights_entry)
+
+        # Match each model weight to an array by shape.
+        # All 6 weight shapes in this architecture are unique:
+        #   (1024,1000), (1000,), (1000,500), (500,), (500,1), (1,)
+        by_shape = {arr.shape: arr for arr in leaf_arrays.values()}
+        loaded = []
+        for i, w in enumerate(model.get_weights()):
+            if w.shape not in by_shape:
+                raise RuntimeError(
+                    f"Model weight {i} has shape {w.shape} but no matching "
+                    f"array found in {weights_entry}. "
+                    f"Available shapes: {sorted(by_shape.keys())}"
+                )
+            loaded.append(by_shape.pop(w.shape))
+
+        model.set_weights(loaded)
+
+    logger.info("Model weights loaded via h5py (bypassed keras weight loader).")
     return model
 
 
