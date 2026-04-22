@@ -30,6 +30,7 @@ import tempfile
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import RepeatedStratifiedKFold, train_test_split
+from sklearn.utils.class_weight import compute_class_weight
 from tensorflow import keras
 from tensorflow.keras import Sequential, layers, optimizers, callbacks
 
@@ -95,7 +96,7 @@ def build_dnn(input_dim, dropout=0.25, lr=0.001, n_hidden1=1000, n_hidden2=500):
     return model
 
 
-def run_dnn(X_train, y_train, X_val, y_val, model_path, epochs=2000, batch_size=64, patience=50):
+def run_dnn(X_train, y_train, X_val, y_val, model_path, epochs=2000, batch_size=64, patience=50, class_weight=None):
     model = build_dnn(X_train.shape[1])
     cb_list = [
         callbacks.ModelCheckpoint(model_path, save_best_only=True),
@@ -105,7 +106,7 @@ def run_dnn(X_train, y_train, X_val, y_val, model_path, epochs=2000, batch_size=
         X_train, y_train,
         validation_data=(X_val, y_val),
         epochs=epochs, batch_size=batch_size,
-        callbacks=cb_list, verbose=0,
+        callbacks=cb_list, class_weight=class_weight, verbose=0,
     )
     return model
 
@@ -184,12 +185,18 @@ def main():
             X_fold_train, y_fold_train, test_size=0.1, shuffle=True, random_state=None
         )
 
+        # Class weights computed from the inner training set so the loss
+        # penalises minority-class (active) errors proportionally to the
+        # imbalance ratio in this specific fold.
+        weights = compute_class_weight("balanced", classes=np.array([0, 1]), y=y_tr.ravel())
+        class_weight = {0: weights[0], 1: weights[1]}
+
         # Temp file so 25 model checkpoints don't accumulate on disk
         with tempfile.NamedTemporaryFile(suffix=".keras", delete=False) as tmp:
             tmp_path = tmp.name
 
         try:
-            model = run_dnn(X_tr, y_tr, X_es, y_es, tmp_path)
+            model = run_dnn(X_tr, y_tr, X_es, y_es, tmp_path, class_weight=class_weight)
             cv_metrics = model.evaluate(X_fold_val, y_fold_val, verbose=0)
             dnn_cv_rows.append([repeat, fold] + cv_metrics)
 
