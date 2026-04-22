@@ -40,9 +40,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-TRAIN_FP_PATH = "../Data/Training/M1/M1_training_set_REINVENT4_FPs.csv"
-TEST_FP_PATH  = "../Data/Test/M1_test_scaffold_split_FPs.csv"
-RESULTS_DIR   = "../Data/Results/M1"
+TRAIN_FP_PATH = "train_df_FPs.csv"
+TEST_FP_PATH  = "test_df_FPs.csv"
+RESULTS_DIR   = "."
 
 N_SPLITS     = 5
 N_REPEATS    = 5
