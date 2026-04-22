@@ -16,7 +16,7 @@ Outputs (in ../Data/Results/M1/):
   dnn_REINVENT4_5x5cv_summary.csv — mean ± std across all 25 folds
   dnn_REINVENT4_5x5cv_best_test.csv — scaffold-test metrics for the
                                        single best model (selected by
-                                       highest AUC on its held-out fold)
+                                       highest MCC on its held-out fold)
 
 Usage:
     cd Scripts/
@@ -99,8 +99,8 @@ def build_dnn(input_dim, dropout=0.25, lr=0.001, n_hidden1=1000, n_hidden2=500):
 def run_dnn(X_train, y_train, X_val, y_val, model_path, epochs=2000, batch_size=64, patience=50, class_weight=None):
     model = build_dnn(X_train.shape[1])
     cb_list = [
-        callbacks.ModelCheckpoint(model_path, save_best_only=True),
-        callbacks.EarlyStopping(monitor="loss", patience=patience, restore_best_weights=True),
+        callbacks.ModelCheckpoint(model_path, save_best_only=True, monitor="val_loss"),
+        callbacks.EarlyStopping(monitor="val_loss", patience=patience, restore_best_weights=True),
     ]
     model.fit(
         X_train, y_train,
@@ -147,12 +147,12 @@ def main():
     logger.info("Loading training fingerprints: %s", TRAIN_FP_PATH)
     train_fp = pd.read_csv(TRAIN_FP_PATH, index_col=0)
     y_full = np.asarray(train_fp.pop("Activity")).ravel()  # 1-D for KFold
-    X_full = train_fp.to_numpy()
+    X_full = train_fp.to_numpy(dtype=np.float32)
 
     logger.info("Loading test fingerprints: %s", TEST_FP_PATH)
     test_fp = pd.read_csv(TEST_FP_PATH, index_col=0)
     y_test = np.asarray(test_fp.pop("Activity")).reshape(-1, 1)
-    X_test = test_fp.to_numpy()
+    X_test = test_fp.to_numpy(dtype=np.float32)
 
     logger.info(
         "Dataset: %d training samples (%d active, %d inactive), %d test samples",
@@ -181,8 +181,10 @@ def main():
 
         # Inner 10% split from the training fold for early stopping only.
         # The held-out fold (X_fold_val) is never touched during training.
+        # Stratified so the early-stopping val set always contains both classes.
         X_tr, X_es, y_tr, y_es = train_test_split(
-            X_fold_train, y_fold_train, test_size=0.1, shuffle=True, random_state=None
+            X_fold_train, y_fold_train, test_size=0.1, shuffle=True,
+            stratify=y_fold_train, random_state=None
         )
 
         # Class weights computed from the inner training set so the loss
