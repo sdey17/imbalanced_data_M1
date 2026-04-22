@@ -166,7 +166,7 @@ def main():
     )
 
     dnn_cv_rows = []
-    best_model, best_auc, best_fold_label = None, -1.0, ""
+    best_model, best_mcc, best_fold_label = None, -1.0, ""
 
     for fold_idx, (train_idx, val_idx) in enumerate(rskf.split(X_full, y_full)):
         repeat = fold_idx // N_SPLITS + 1
@@ -193,12 +193,16 @@ def main():
             cv_metrics = model.evaluate(X_fold_val, y_fold_val, verbose=0)
             dnn_cv_rows.append([repeat, fold] + cv_metrics)
 
-            fold_auc = cv_metrics[-1]  # AUC is the last metric
-            logger.info("  CV loss %.4f | CV AUC %.4f", cv_metrics[0], fold_auc)
+            # cv_metrics order: [loss, tp, fp, tn, fn, auc]
+            _, tp, fp, tn, fn, _ = cv_metrics
+            fold_mcc = (tp * tn - fp * fn) / np.sqrt(
+                (tp + fp) * (tp + fn) * (tn + fp) * (tn + fn)
+            )
+            logger.info("  CV loss %.4f | CV MCC %.4f", cv_metrics[0], fold_mcc)
 
             # Keep the best model in memory — evaluated on test set after the loop
-            if fold_auc > best_auc:
-                best_auc = fold_auc
+            if fold_mcc > best_mcc:
+                best_mcc = fold_mcc
                 best_model = model
                 best_fold_label = f"repeat {repeat}, fold {fold}"
         finally:
@@ -218,8 +222,8 @@ def main():
     # Evaluate best model on scaffold test set (once)
     # ------------------------------------------------------------------
     logger.info(
-        "Best model: %s (CV AUC %.4f) — evaluating on scaffold test set ...",
-        best_fold_label, best_auc,
+        "Best model: %s (CV MCC %.4f) — evaluating on scaffold test set ...",
+        best_fold_label, best_mcc,
     )
     test_metrics = best_model.evaluate(X_test, y_test, verbose=0)
     test_df = pd.DataFrame([[best_fold_label] + test_metrics], columns=["Best_Fold"] + EVAL_COLS)
