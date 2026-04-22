@@ -12,10 +12,11 @@ Early-stopping validation set:
   for evaluation, so there is no leakage.
 
 Outputs (in ../Data/Results/M1/):
-  dnn_REINVENT4_5x5cv_folds.csv        — per-fold metrics (25 rows)
-  dnn_REINVENT4_5x5cv_summary.csv      — mean ± std across all 25 folds
-  dnn_REINVENT4_5x5cv_test.csv         — scaffold-test performance per fold
-  dnn_REINVENT4_5x5cv_test_summary.csv — scaffold-test mean ± std
+  dnn_REINVENT4_5x5cv_folds.csv   — per-fold CV metrics (25 rows)
+  dnn_REINVENT4_5x5cv_summary.csv — mean ± std across all 25 folds
+  dnn_REINVENT4_5x5cv_best_test.csv — scaffold-test metrics for the
+                                       single best model (selected by
+                                       highest AUC on its held-out fold)
 
 Usage:
     cd Scripts/
@@ -164,7 +165,8 @@ def main():
         n_splits=N_SPLITS, n_repeats=N_REPEATS, random_state=RANDOM_STATE
     )
 
-    dnn_cv_rows, dnn_test_rows = [], []
+    dnn_cv_rows = []
+    best_model, best_auc, best_fold_label = None, -1.0, ""
 
     for fold_idx, (train_idx, val_idx) in enumerate(rskf.split(X_full, y_full)):
         repeat = fold_idx // N_SPLITS + 1
@@ -188,30 +190,45 @@ def main():
 
         try:
             model = run_dnn(X_tr, y_tr, X_es, y_es, tmp_path)
-            dnn_cv_rows.append(
-                [repeat, fold] + model.evaluate(X_fold_val, y_fold_val, verbose=0)
-            )
-            dnn_test_rows.append(
-                [repeat, fold] + model.evaluate(X_test, y_test, verbose=0)
-            )
-            logger.info(
-                "  CV loss %.4f | CV AUC %.4f",
-                dnn_cv_rows[-1][2], dnn_cv_rows[-1][-1],
-            )
+            cv_metrics = model.evaluate(X_fold_val, y_fold_val, verbose=0)
+            dnn_cv_rows.append([repeat, fold] + cv_metrics)
+
+            fold_auc = cv_metrics[-1]  # AUC is the last metric
+            logger.info("  CV loss %.4f | CV AUC %.4f", cv_metrics[0], fold_auc)
+
+            # Keep the best model in memory — evaluated on test set after the loop
+            if fold_auc > best_auc:
+                best_auc = fold_auc
+                best_model = model
+                best_fold_label = f"repeat {repeat}, fold {fold}"
         finally:
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
 
     # ------------------------------------------------------------------
-    # Save results
+    # Save CV results
     # ------------------------------------------------------------------
-    dnn_cv_df   = save_fold_results(dnn_cv_rows,  f"{RESULTS_DIR}/dnn_REINVENT4_5x5cv_folds.csv")
-    dnn_test_df = save_fold_results(dnn_test_rows, f"{RESULTS_DIR}/dnn_REINVENT4_5x5cv_test.csv")
-    dnn_cv_sum  = save_summary(dnn_cv_df,          f"{RESULTS_DIR}/dnn_REINVENT4_5x5cv_summary.csv")
-    _           = save_summary(dnn_test_df,        f"{RESULTS_DIR}/dnn_REINVENT4_5x5cv_test_summary.csv")
+    dnn_cv_df  = save_fold_results(dnn_cv_rows, f"{RESULTS_DIR}/dnn_REINVENT4_5x5cv_folds.csv")
+    dnn_cv_sum = save_summary(dnn_cv_df,         f"{RESULTS_DIR}/dnn_REINVENT4_5x5cv_summary.csv")
 
     logger.info("\nDNN CV performance (mean ± std across %d folds):", N_SPLITS * N_REPEATS)
     logger.info("\n%s", dnn_cv_sum.to_string())
+
+    # ------------------------------------------------------------------
+    # Evaluate best model on scaffold test set (once)
+    # ------------------------------------------------------------------
+    logger.info(
+        "Best model: %s (CV AUC %.4f) — evaluating on scaffold test set ...",
+        best_fold_label, best_auc,
+    )
+    test_metrics = best_model.evaluate(X_test, y_test, verbose=0)
+    test_df = pd.DataFrame([[best_fold_label] + test_metrics], columns=["Best_Fold"] + EVAL_COLS)
+    test_df = metrics_calc(test_df)
+    test_df[["Best_Fold"] + REPORT_COLS].to_csv(
+        f"{RESULTS_DIR}/dnn_REINVENT4_5x5cv_best_test.csv", index=False
+    )
+    logger.info("Test results saved to %s/dnn_REINVENT4_5x5cv_best_test.csv", RESULTS_DIR)
+    logger.info("Test set performance:\n%s", test_df[REPORT_COLS].to_string(index=False))
 
 
 if __name__ == "__main__":
