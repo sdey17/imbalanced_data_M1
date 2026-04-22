@@ -235,13 +235,14 @@ def main():
         best_fold_label, best_mcc,
     )
     test_metrics = best_model.evaluate(X_test, y_test, verbose=0)
-    test_df = pd.DataFrame([[best_fold_label] + test_metrics], columns=["Best_Fold"] + EVAL_COLS)
-    test_df = metrics_calc(test_df)
-    test_df[["Best_Fold"] + REPORT_COLS].to_csv(
-        f"{RESULTS_DIR}/dnn_REINVENT4_5x5cv_best_test.csv", index=False
+    test_row = pd.DataFrame([test_metrics], columns=EVAL_COLS)
+    test_row = metrics_calc(test_row)
+    test_out = pd.concat(
+        [pd.DataFrame({"Best_Fold": [best_fold_label]}), test_row[REPORT_COLS]], axis=1
     )
+    test_out.to_csv(f"{RESULTS_DIR}/dnn_REINVENT4_5x5cv_best_test.csv", index=False)
     logger.info("Test results saved to %s/dnn_REINVENT4_5x5cv_best_test.csv", RESULTS_DIR)
-    logger.info("Test set performance:\n%s", test_df[REPORT_COLS].to_string(index=False))
+    logger.info("Test set performance:\n%s", test_out[REPORT_COLS].to_string(index=False))
 
 
 if __name__ == "__main__":
