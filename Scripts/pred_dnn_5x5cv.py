@@ -146,12 +146,12 @@ def main():
     # ------------------------------------------------------------------
     logger.info("Loading training fingerprints: %s", TRAIN_FP_PATH)
     train_fp = pd.read_csv(TRAIN_FP_PATH, index_col=0)
-    y_full = np.asarray(train_fp.pop("Activity")).ravel()  # 1-D for KFold
+    y_full = np.asarray(train_fp.pop("CLASS")).ravel()  # 1-D for KFold
     X_full = train_fp.to_numpy(dtype=np.float32)
 
     logger.info("Loading test fingerprints: %s", TEST_FP_PATH)
     test_fp = pd.read_csv(TEST_FP_PATH, index_col=0)
-    y_test = np.asarray(test_fp.pop("Activity")).reshape(-1, 1)
+    y_test = np.asarray(test_fp.pop("CLASS")).reshape(-1, 1)
     X_test = test_fp.to_numpy(dtype=np.float32)
 
     logger.info(
